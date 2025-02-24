@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-qa"
+version = "0.1.0"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" },
+]
+description = "A document Q&A system using LLMs"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pylint.messages_control]
+disable = [
+    "C0111",  # missing-docstring
+    "C0103",  # invalid-name
+    "C0303",  # trailing-whitespace
+    "W0511",  # fixme
+    "W0703",  # broad-except
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "C0302",  # too-many-lines
+    "C0325",  # superfluous-parens
+    "R0912",  # too-many-branches
+    "R0915",  # too-many-statements
+    "R0902",  # too-many-instance-attributes
+    "R0904",  # too-many-public-methods
+    "R0801",  # duplicate-code
+    "W0221",  # arguments-differ
+    "W0212",  # protected-access
+    "C0413",  # wrong-import-position
+    "C0412",  # ungrouped-imports
+    "C0411",  # wrong-import-order
+    "W0611",  # unused-import
+    "W0718",  # broad-exception-caught
+]
+
+[tool.pylint.format]
+max-line-length = 79
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "Run", "_"]
+
+[tool.pylint.design]
+max-args = 5
+max-attributes = 7
+max-bool-expr = 5
+max-branches = 12
+max-locals = 15
+max-parents = 7
+max-public-methods = 20
+max-returns = 6
+max-statements = 50
+min-public-methods = 2 
