@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     
+    # Sentry settings
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    
     # CORS settings
     ALLOWED_ORIGINS: List[str] = [
         # Development URLs
