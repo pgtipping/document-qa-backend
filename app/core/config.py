@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     
+    # S3 settings
+    AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
+    S3_BUCKET: str = os.getenv("S3_BUCKET", "")
+    S3_PERFORMANCE_LOGS_PREFIX: str = "performance_logs/"
+    
     # Sentry settings
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
     

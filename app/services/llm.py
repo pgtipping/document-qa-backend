@@ -11,16 +11,16 @@ from typing import Dict, Optional, List, Any
 import logging
 import asyncio
 import json
-from pathlib import Path
-import aiofiles
+import boto3
+from botocore.exceptions import ClientError
+from datetime import datetime
 import time
 import re
-from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Change from DEBUG to INFO
-    format='%(levelname)s: %(message)s'  # Simpler format
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,22 @@ class LLMService:
         self.max_context_length = 4000
         self.timing_metrics = {}
         
-        # Setup performance logging
-        self.perf_log_path = Path("../frontend/performance_logs")
-        self.perf_log_path.mkdir(parents=True, exist_ok=True)
+        # Initialize S3 client if credentials are available
+        if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
+            try:
+                self.s3_client = boto3.client(
+                    's3',
+                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                    region_name=settings.AWS_REGION
+                )
+                logger.info("S3 client initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize S3 client: {str(e)}")
+                self.s3_client = None
+        else:
+            logger.warning("AWS credentials not found, S3 logging disabled")
+            self.s3_client = None
 
     def _init_groq(self) -> None:
         """Initialize Groq client."""
@@ -399,9 +412,13 @@ class LLMService:
         timing_metrics: Dict[str, float],
         doc_timing_metrics: Dict[str, float]
     ) -> None:
-        """Log detailed performance metrics to a JSON file."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_file = self.perf_log_path / "performance_metrics.json"
+        """Log detailed performance metrics to S3."""
+        if not self.s3_client or not settings.S3_BUCKET:
+            logger.warning("S3 not configured, skipping performance logging")
+            return
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_key = f"{settings.S3_PERFORMANCE_LOGS_PREFIX}{timestamp}_{document_id}.json"
         
         # Calculate totals with safety checks
         llm_total = sum(timing_metrics.values()) or 1  # Use 1 if sum is 0
@@ -441,26 +458,19 @@ class LLMService:
         }
 
         try:
-            # Read existing logs
-            existing_logs = []
-            if log_file.exists():
-                async with aiofiles.open(log_file, 'r') as f:
-                    content = await f.read()
-                    if content.strip():
-                        existing_logs = json.loads(content)
-            
-            # Append new log
-            existing_logs.append(metric_entry)
-            
-            # Write updated logs
-            async with aiofiles.open(log_file, 'w') as f:
-                await f.write(json.dumps(existing_logs, indent=2))
+            # Upload metrics to S3
+            self.s3_client.put_object(
+                Bucket=settings.S3_BUCKET,
+                Key=log_key,
+                Body=json.dumps(metric_entry, indent=2),
+                ContentType='application/json'
+            )
+            logger.debug(f"Performance metrics uploaded to S3: {log_key}")
                 
+        except ClientError as e:
+            logger.error(f"Failed to upload metrics to S3: {str(e)}")
         except Exception as e:
-            logger.error(f"Error writing performance metrics: {str(e)}")
-            # Create a new file if there was an error reading/parsing the existing one
-            async with aiofiles.open(log_file, 'w') as f:
-                await f.write(json.dumps([metric_entry], indent=2))
+            logger.error(f"Unexpected error uploading metrics: {str(e)}")
 
     async def get_answer(self, document_id: str, question: str) -> str:
         """Get an answer from the LLM based on the document content."""
