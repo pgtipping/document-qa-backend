@@ -1,4 +1,7 @@
 curl
 build-essential
 rustc
-cargo 
+cargo
+libmagic1
+tesseract-ocr
+poppler-utils 
