@@ -14,6 +14,7 @@ import json
 import boto3
 from botocore.exceptions import ClientError
 from datetime import datetime
+from pathlib import Path
 import time
 import re
 
