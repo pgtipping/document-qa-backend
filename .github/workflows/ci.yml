@@ -28,10 +28,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-cov pytest-asyncio
+          pip install -e .  # Install package in editable mode
 
       - name: Run tests
         env:
           TESTING: "true"
+          PYTHONPATH: ${{ github.workspace }}
           # Using dummy values for testing
           AWS_ACCESS_KEY_ID: "test_key_id"
           AWS_SECRET_ACCESS_KEY: "test_secret_key"
