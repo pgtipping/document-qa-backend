@@ -30,13 +30,14 @@ jobs:
       - name: Run tests
         env:
           TESTING: "true"
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          # Using dummy values for testing
+          GROQ_API_KEY: "test_groq_key"
+          TOGETHER_API_KEY: "test_together_key"
+          DEEPSEEK_API_KEY: "test_deepseek_key"
+          GEMINI_API_KEY: "test_gemini_key"
+          OPENAI_API_KEY: "test_openai_key"
+          AWS_ACCESS_KEY_ID: "test_aws_key_id"
+          AWS_SECRET_ACCESS_KEY: "test_aws_secret_key"
+          AWS_DEFAULT_REGION: "us-east-1"
         run: |
           pytest tests/ -v
