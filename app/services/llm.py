@@ -12,6 +12,7 @@ import logging
 import asyncio
 import json
 import boto3
+import aiofiles
 from botocore.exceptions import ClientError
 from datetime import datetime
 from pathlib import Path
