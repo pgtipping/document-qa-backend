@@ -6,6 +6,7 @@ import tempfile
 import os
 import hashlib
 from typing import List, Generator
+from unittest.mock import patch, MagicMock
 
 
 pytestmark = pytest.mark.asyncio
@@ -81,12 +82,23 @@ class TestRegression:
         for doc_id in uploaded_ids:
             assert doc_id in listed_ids
 
+    @patch('app.api.routes.llm_service')
     def test_qa_regression(
         self,
+        mock_llm: MagicMock,
         test_client: TestClient,
         test_files: List[str]
     ) -> None:
         """Test Q&A functionality hasn't regressed."""
+        # Configure mock LLM service
+        async def mock_get_answer(*args, **kwargs):
+            return "This is a mock answer"
+            
+        mock_llm.get_answer = mock_get_answer
+        mock_llm.available_providers = ["mock_provider"]
+        mock_llm.current_provider = "mock_provider"
+        mock_llm.current_model = "mock_model"
+        
         # Upload a test document
         with open(test_files[0], "rb") as f:
             response = test_client.post(
@@ -94,6 +106,12 @@ class TestRegression:
                 files={"file": f}
             )
             document_id = response.json()["document_id"]
+
+        # Get available models
+        models_response = test_client.get("/api/models")
+        assert models_response.status_code == 200
+        models_data = models_response.json()
+        default_model = models_data["default_model"]
 
         # Test question answering
         test_questions = [
@@ -107,7 +125,8 @@ class TestRegression:
                 "/api/ask",
                 json={
                     "document_id": document_id,
-                    "question": question
+                    "question": question,
+                    "model": default_model
                 }
             )
             assert response.status_code == 200
