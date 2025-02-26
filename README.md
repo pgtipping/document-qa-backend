@@ -1,5 +1,7 @@
 # Document Q&A Backend
 
+![CI Status](https://github.com/pgtipping/document-qa-backend/actions/workflows/ci.yml/badge.svg)
+
 FastAPI service handling document processing and LLM integration for Document Q&A system.
 
 ## Features
