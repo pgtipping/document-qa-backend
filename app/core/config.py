@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     # API settings
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     
     # S3 settings
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
@@ -51,20 +51,16 @@ class Settings(BaseSettings):
     
     # Available models
     AVAILABLE_MODELS: ClassVar[Dict[str, Dict[str, str]]] = {
+        "openrouter": {
+            "nvidia/llama-3.1-nemotron-ultra-253b-v1:free":
+            "Llama 3.1 Nemotron Ultra 253B (Openrouter)",
+        },
+        "google": {
+            "gemini-2.5-flash-preview-04-17":
+            "Gemini 2.5 Flash Preview (Google)",
+        },
         "groq": {
-            "llama-3.2-3b-preview": "Meta Llama 3.2-3B",
-        },
-        "together": {
-            "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": "Meta Llama 3.1-8B",
-        },
-        "deepseek": {
-            "deepseek-chat": "Deepseek V3",
-        },
-        "gemini": {
-            "gemini-1.5-flash-8b": "Gemini 1.5 Flash-8B",
-        },
-        "openai": {
-            "gpt-4o-mini": "GPT-4o mini",
+            "llama-3.1-8b-instant": "Llama 3.1 8B Instant (Groq)",
         }
     }
     
@@ -91,15 +87,16 @@ class Settings(BaseSettings):
         # Find first available provider
         for provider, api_key in {
             "groq": self.GROQ_API_KEY,
-            "together": self.TOGETHER_API_KEY,
-            "deepseek": self.DEEPSEEK_API_KEY,
             "gemini": self.GEMINI_API_KEY,
-            "openai": self.OPENAI_API_KEY
+            "openai": self.OPENAI_API_KEY,
+            "openrouter": self.OPENROUTER_API_KEY
         }.items():
             if api_key:
                 print(f"{provider.upper()}_API_KEY is set")
                 self.DEFAULT_PROVIDER = provider
-                self.DEFAULT_MODEL = next(iter(self.AVAILABLE_MODELS[provider].keys()))
+                self.DEFAULT_MODEL = next(
+                    iter(self.AVAILABLE_MODELS[provider].keys())
+                )
                 break
                 
         if not self.DEFAULT_PROVIDER:
@@ -107,6 +104,8 @@ class Settings(BaseSettings):
                 "No API keys found. At least one provider API key must be set "
                 "in environment variables or .env file"
             )
+
+        print(f"Default model loaded: {self.DEFAULT_MODEL}")
 
     @property
     def ALLOWED_EXTENSIONS(self) -> List[str]:

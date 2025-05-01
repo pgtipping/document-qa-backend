@@ -56,21 +56,30 @@ class LLMService:
         self._init_deepseek()
         self._init_gemini()
         self._init_openai()
+        self._init_openrouter()
         
-        # Set default provider and model if any available
-        if self.available_providers:
-            self.current_provider = self.available_providers[0]
-            models = settings.AVAILABLE_MODELS[self.current_provider]
-            self.current_model = next(iter(models.keys()))
-            msg = (
-                f"Using {self.current_provider} "
-                f"with model {self.current_model}"
-            )
-            logger.info(msg)
+        # The fallback order is defined by the user
+        self.fallback_providers = ["openrouter", "google", "groq"]
+        
+        # Check if at least one of the fallback providers is available
+        if not any(provider in self.available_providers for provider in self.fallback_providers):
+             logger.error("None of the specified fallback LLM providers are available")
+             self.current_provider = ""
+             self.current_model = ""
         else:
-            logger.error("No LLM providers available")
-            self.current_provider = ""
-            self.current_model = ""
+             logger.info("Fallback LLM providers initialized")
+             # Set current provider/model to the first available in the fallback list for initial state
+             for provider in self.fallback_providers:
+                 if provider in self.available_providers:
+                     self.current_provider = provider
+                     models = settings.AVAILABLE_MODELS[self.current_provider]
+                     self.current_model = next(iter(models.keys()))
+                     msg = (
+                         f"Initial provider set to {self.current_provider} "
+                         f"with model {self.current_model} based on fallback order"
+                     )
+                     logger.info(msg)
+                     break
 
         # Initialize other service components
         self.document_service = DocumentService()
@@ -167,32 +176,48 @@ class LLMService:
         except Exception as e:
             logger.error(f"OpenAI init failed: {str(e)}")
 
-    def set_model(self, provider: str, model: str) -> None:
-        """Set the current model and provider to use."""
-        if provider not in settings.AVAILABLE_MODELS:
-            avail = ", ".join(self.available_providers)
-            raise ValueError(
-                f"Provider {provider} not supported. "
-                f"Available providers: {avail}"
+    def _init_openrouter(self) -> None:
+        """Initialize OpenRouter client."""
+        if not settings.OPENROUTER_API_KEY:
+            return
+
+        try:
+            self.clients["openrouter"] = AsyncOpenAI(
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1"
             )
+            self.available_providers.append("openrouter")
+            logger.info("OpenRouter initialized")
+        except Exception as e:
+            logger.error(f"OpenRouter init failed: {str(e)}")
+
+    # Removed set_model as model selection is removed from UI
+    # def set_model(self, provider: str, model: str) -> None:
+    #     """Set the current model and provider to use."""
+    #     if provider not in settings.AVAILABLE_MODELS:
+    #         avail = ", ".join(self.available_providers)
+    #         raise ValueError(
+    #             f"Provider {provider} not supported. "
+    #             f"Available providers: {avail}"
+    #         )
             
-        if model not in settings.AVAILABLE_MODELS[provider]:
-            models = ", ".join(settings.AVAILABLE_MODELS[provider].keys())
-            raise ValueError(
-                f"Model {model} not supported for provider {provider}. "
-                f"Available models: {models}"
-            )
+    #     if model not in settings.AVAILABLE_MODELS[provider]:
+    #         models = ", ".join(settings.AVAILABLE_MODELS[provider].keys())
+    #         raise ValueError(
+    #             f"Model {model} not supported for provider {provider}. "
+    #             f"Available models: {models}"
+    #         )
             
-        if provider not in self.clients:
-            raise ValueError(
-                f"Provider {provider} not initialized. "
-                "Please check API key and provider status."
-            )
+    #     if provider not in self.clients:
+    #         raise ValueError(
+    #             f"Provider {provider} not initialized. "
+    #             "Please check API key and provider status."
+    #         )
             
-        self.current_provider = provider
-        self.current_model = model
-        msg = f"Set model to {model} from provider {provider}"
-        logger.debug(msg)
+    #     self.current_provider = provider
+    #     self.current_model = model
+    #     msg = f"Set model to {model} from provider {provider}"
+    #     logger.debug(msg)
 
     def _split_into_chunks(self, text: str) -> List[str]:
         """Split text into smaller, more focused chunks."""
@@ -424,7 +449,6 @@ class LLMService:
         
         # Calculate totals with safety checks
         llm_total = sum(timing_metrics.values()) or 1  # Use 1 if sum is 0
-        doc_total = sum(doc_timing_metrics.values()) or 1  # Use 1 if sum is 0
         
         # Format metrics for JSON
         metric_entry = {
@@ -475,306 +499,238 @@ class LLMService:
             logger.error(f"Unexpected error uploading metrics: {str(e)}")
 
     async def get_answer(self, document_id: str, question: str) -> str:
-        """Get an answer from the LLM based on the document content."""
+        """Get answer to a question based on document content."""
         start_time = time.time()
-        self.timing_metrics.clear()  # Reset timing metrics
+        self.timing_metrics = {}  # Reset timing for each request
+        doc_timing_metrics = {} # Timing for document processing
 
-        if not self.current_provider or not self.current_model:
-            available = ", ".join(self.available_providers) if self.available_providers else "none"
-            raise ValueError(f"No LLM provider selected. Available providers: {available}")
-            
-        if not self.clients.get(self.current_provider):
-            raise ValueError(f"Selected provider {self.current_provider} is not properly initialized")
+        # 1. Retrieve and process document content
+        doc_start_time = time.time()
+        document_content = await self.document_service.get_document_content(document_id)
+        doc_timing_metrics["get_document_content"] = time.time() - doc_start_time
 
-        try:
-            # Check cache
-            cache_key = self._generate_cache_key(document_id, question)
-            cached_response = self._get_from_cache(cache_key)
-            if cached_response:
-                self._record_timing("Cache Retrieval", start_time)
-                return cached_response
+        if not document_content:
+            logger.warning(f"Document with ID {document_id} not found.")
+            return "Could not retrieve document content."
 
-            # Track content metrics
+        # 2. Split content into chunks
+        doc_start_time = time.time()
+        chunks = self._split_into_chunks(document_content)
+        doc_timing_metrics["split_into_chunks"] = time.time() - doc_start_time
+
+        if not chunks:
+            logger.warning("Document is empty or could not be processed into chunks.")
+            return "Could not process document content."
+
+        # 3. Get relevant chunks based on the question
+        doc_start_time = time.time()
+        relevant_chunks = self._get_relevant_chunks(chunks, question)
+        doc_timing_metrics["get_relevant_chunks"] = time.time() - doc_start_time
+
+        if not relevant_chunks:
+            logger.warning("No relevant content found for the question.")
+            # Log metrics even if no relevant chunks are found
             content_metrics = {
-                "size_kb": 0,
-                "total_chunks": 0,
+                "size_kb": len(document_content.encode('utf-8')) / 1024,
+                "total_chunks": len(chunks),
                 "selected_chunks": 0,
                 "context_length": 0
             }
+            await self._log_performance_metrics(
+                document_id, question, content_metrics, self.timing_metrics, doc_timing_metrics
+            )
+            return "Could not find relevant information in the document to answer the question."
 
-            # Get document content
-            content_start = time.time()
-            content = await self.document_service.get_document_content(document_id)
-            content_str = content.decode('utf-8')
-            content_metrics["size_kb"] = len(content_str) / 1024
-            start_time = self._record_timing("Document Retrieval", content_start)
+        # Combine relevant chunks for the prompt
+        context_content = "\n\n".join(relevant_chunks)
 
-            # Split content and get relevant chunks
-            chunk_start = time.time()
-            chunks = self._split_into_chunks(content_str)
-            content_metrics["total_chunks"] = len(chunks)
-            start_time = self._record_timing("Content Chunking", chunk_start)
+        # Log content metrics
+        content_metrics = {
+            "size_kb": len(document_content.encode('utf-8')) / 1024,
+            "total_chunks": len(chunks),
+            "selected_chunks": len(relevant_chunks),
+            "context_length": len(context_content)
+        }
+        logger.debug(f"Content metrics: {content_metrics}")
 
-            # Get relevant chunks
-            relevance_start = time.time()
-            relevant_chunks = self._get_relevant_chunks(chunks, question)
-            content_metrics["selected_chunks"] = len(relevant_chunks)
-            relevant_content = " ".join(relevant_chunks)
-            content_metrics["context_length"] = len(relevant_content)
-            start_time = self._record_timing("Relevance Analysis", relevance_start)
+        # 4. Create prompt for the LLM
+        prompt = self._create_prompt(context_content, question)
 
-            # Create prompt
-            prompt_start = time.time()
-            prompt = self._create_prompt(relevant_content, question)
-            start_time = self._record_timing("Prompt Creation", prompt_start)
+        # 5. Get completion from LLM with fallback
+        llm_start_time = time.time()
+        answer = await self.get_completion(prompt)
+        self.timing_metrics["get_completion"] = time.time() - llm_start_time
 
-            # Get LLM response
-            llm_start = time.time()
-            response = await self.get_completion(prompt)
-            start_time = self._record_timing("LLM Processing", llm_start)
+        # 6. Log performance metrics
+        await self._log_performance_metrics(
+            document_id, question, content_metrics, self.timing_metrics, doc_timing_metrics
+        )
 
-            # Cache the response
-            cache_start = time.time()
-            self._add_to_cache(cache_key, response)
-            self._record_timing("Cache Update", cache_start)
-
-            # Log metrics asynchronously - don't wait for it
-            try:
-                asyncio.create_task(self._log_performance_metrics(
-                    document_id,
-                    question,
-                    content_metrics,
-                    self.timing_metrics.copy(),  # Copy to avoid race conditions
-                    self.document_service.timing_metrics.copy()
-                ))
-            except Exception as e:
-                # Just log the error but don't fail the request
-                logger.error(f"Failed to log metrics: {str(e)}")
-
-            return response
-
-        except UnicodeDecodeError as e:
-            logger.error(f"Failed to decode document content: {str(e)}")
-            raise ValueError("Failed to read document content. The document might be corrupted or in an unsupported format.")
-        except Exception as e:
-            logger.error(f"Error in get_answer: {str(e)}")
-            raise ValueError(f"Failed to get answer: {str(e)}")
-
-    def _generate_cache_key(self, document_id: str, question: str) -> str:
-        """Generate a unique cache key for a document-question pair."""
-        # Include provider and model in the cache key to separate responses by model
-        if not self.current_provider or not self.current_model:
-            raise ValueError("No model selected for caching")
-            
-        combined = f"{document_id}:{question.lower().strip()}:{self.current_provider}:{self.current_model}"
-        return hashlib.sha256(combined.encode()).hexdigest()
-
-    def _get_from_cache(self, cache_key: str) -> Optional[str]:
-        """Get a response from cache if it exists and is not expired."""
-        if cache_key in self.cache:
-            answer, timestamp = self.cache[cache_key]
-            if time.time() - timestamp < self.cache_ttl:
-                return answer
-            else:
-                del self.cache[cache_key]
-        return None
-
-    def _add_to_cache(self, cache_key: str, answer: str) -> None:
-        """Add a response to the cache with current timestamp."""
-        self.cache[cache_key] = (answer, time.time())
+        return answer
 
     async def test_connection(self) -> bool:
-        """Test if the LLM service is accessible."""
+        """Test connection to the current LLM provider."""
+        if not self.current_provider or not self.current_model:
+            logger.warning("No LLM provider or model is currently set.")
+            return False
+
         try:
-            # Test each available provider
-            results = await self._test_all_providers()
-            return any(results.values())
+            # Attempt a simple completion or ping based on provider capabilities
+            # This is a simplified test; a more robust test would be provider-specific
+            prompt = "Hello, world!"
+            await self.get_completion(prompt)
+            logger.info(f"Connection test successful for {self.current_provider}")
+            return True
         except Exception as e:
-            logger.error(f"Connection test failed: {str(e)}")
+            logger.error(f"Connection test failed for {self.current_provider}: {str(e)}")
             return False
 
     async def _test_all_providers(self) -> Dict[str, bool]:
-        """Test all available providers and return their status."""
+        """Test connection for all available providers."""
         results = {}
-        original_provider = self.current_provider
-        original_model = self.current_model
-        
-        test_prompt = "Respond with 'OK' if you can read this message."
-        
         for provider in self.available_providers:
             try:
-                # Set the provider and its first available model
-                models = settings.AVAILABLE_MODELS[provider]
-                model = next(iter(models.keys()))
-                self.set_model(provider, model)
+                # Use a small, fast model for testing if available
+                test_model = next(iter(settings.AVAILABLE_MODELS[provider].keys()))
                 
-                # Test the provider
-                logger.info(f"Testing {provider} with model {model}...")
-                response = await self.get_completion(test_prompt)
-                
-                # Check if response is valid
-                is_working = bool(response and response.strip())
-                results[provider] = is_working
-                
-                status = "working" if is_working else "failed"
-                logger.info(f"{provider} status: {status}")
-                
+                # Temporarily set provider and model for testing
+                original_provider = self.current_provider
+                original_model = self.current_model
+                self.current_provider = provider
+                self.current_model = test_model
+
+                # Attempt a simple completion
+                prompt = "Test connection."
+                await self.get_completion(prompt)
+                results[provider] = True
+                logger.info(f"Provider {provider} test successful.")
             except Exception as e:
-                logger.error(f"{provider} test failed: {str(e)}")
                 results[provider] = False
-        
-        # Restore original provider and model
-        if original_provider and original_model:
-            self.set_model(original_provider, original_model)
-        
+                logger.error(f"Provider {provider} test failed: {str(e)}")
+            finally:
+                # Restore original provider and model
+                self.current_provider = original_provider
+                self.current_model = original_model
         return results
 
     async def test_provider(self, provider: str) -> bool:
-        """Test a specific provider's endpoint."""
+        """Test a specific LLM provider."""
         if provider not in self.available_providers:
-            logger.error(f"Provider {provider} not available")
+            logger.warning(f"Provider {provider} is not available.")
             return False
-            
+
         try:
-            # Save current provider/model
+            # Use a small, fast model for testing if available
+            test_model = next(iter(settings.AVAILABLE_MODELS[provider].keys()))
+            
+            # Temporarily set provider and model for testing
             original_provider = self.current_provider
             original_model = self.current_model
-            
-            # Set the test provider and model
-            models = settings.AVAILABLE_MODELS[provider]
-            model = next(iter(models.keys()))
-            self.set_model(provider, model)
-            
-            # Test with a simple prompt
-            logger.info(f"Testing {provider} with model {model}...")
-            test_prompt = "Respond with 'OK' if you can read this message."
-            response = await self.get_completion(test_prompt)
-            
-            # Verify response
-            is_working = bool(response and response.strip())
-            status = "working" if is_working else "failed"
-            logger.info(f"{provider} status: {status}")
-            
-            # Restore original provider/model
-            if original_provider and original_model:
-                self.set_model(original_provider, original_model)
-                
-            return is_working
-            
+            self.current_provider = provider
+            self.current_model = test_model
+
+            # Attempt a simple completion
+            prompt = "Test connection."
+            await self.get_completion(prompt)
+            logger.info(f"Provider {provider} test successful.")
+            return True
         except Exception as e:
-            logger.error(f"{provider} test failed: {str(e)}")
+            logger.error(f"Provider {provider} test failed: {str(e)}")
             return False
+        finally:
+            # Restore original provider and model
+            self.current_provider = original_provider
+            self.current_model = original_model
 
     async def get_completion(self, prompt: str) -> str:
-        """Get completion from the current model."""
-        if not self.current_provider or not self.current_model:
-            raise ValueError("No model selected")
+        """Get completion from the current LLM provider with fallback."""
+        providers_to_try = [self.current_provider] + [p for p in self.fallback_providers if p != self.current_provider]
+        
+        for provider in providers_to_try:
+            if provider not in self.clients:
+                logger.warning(f"Provider {provider} not initialized, skipping.")
+                continue
 
-        client = self.clients.get(self.current_provider)
-        if not client:
-            raise ValueError(
-                f"Provider {self.current_provider} not initialized"
-            )
+            client = self.clients[provider]
+            model = settings.AVAILABLE_MODELS.get(provider, {}).get(self.current_model) # Use current_model for consistency
 
-        try:
-            if self.current_provider == "groq":
-                response = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=self.current_model,
-                )
-                return str(response.choices[0].message.content)
+            if not model:
+                 logger.warning(f"Model {self.current_model} not available for provider {provider}, skipping.")
+                 continue
 
-            if self.current_provider == "together":
-                max_retries = 3
-                retry_delay = 1
-                last_error = None
-                
-                for attempt in range(max_retries):
-                    try:
-                        response = client.chat.completions.create(
-                            messages=[{"role": "user", "content": prompt}],
-                            model=self.current_model,
-                            timeout=60
-                        )
-                        return str(response.choices[0].message.content)
-                    except Exception as e:
-                        last_error = e
-                        msg = (
-                            f"Together retry {attempt + 1}/{max_retries}: {e}"
-                        )
-                        logger.error(msg)
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delay)
-                            retry_delay *= 2
-                            continue
-                raise last_error
+            logger.info(f"Attempting completion with provider: {provider}, model: {model}")
 
-            if self.current_provider == "deepseek":
-                response = client.chat.completions.create(
-                    model=self.current_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant"
-                        },
-                        {"role": "user", "content": prompt}
-                    ],
-                    stream=False
-                )
-                return str(response.choices[0].message.content)
+            try:
+                if provider == "groq":
+                    response = client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1500,
+                    )
+                    return response.choices[0].message.content.strip()
+                elif provider == "together":
+                    response = client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1500,
+                    )
+                    return response.choices[0].message.content.strip()
+                elif provider == "deepseek":
+                    response = client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1500,
+                    )
+                    return response.choices[0].message.content.strip()
+                elif provider == "google":
+                    # Google's API has a different structure
+                    response = client.generate_content(
+                        contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                        generation_config={"temperature": 0.7, "max_output_tokens": 1500}
+                    )
+                    return response.text.strip()
+                elif provider == "openai" or self.current_provider == "openrouter":
+                    response = await client.chat.completions.create(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model,
+                        temperature=0.7,
+                        max_tokens=1500,
+                    )
+                    return response.choices[0].message.content.strip()
 
-            if self.current_provider == "gemini":
-                response = client.generate_content(prompt)
-                return str(response.text)
+            except Exception as e:
+                logger.error(f"Provider {provider} failed: {str(e)}")
+                # Continue to the next provider in the fallback list
 
-            if self.current_provider == "openai":
-                response = await client.chat.completions.create(
-                    model=self.current_model,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return str(response.choices[0].message.content)
-
-            raise ValueError(f"Provider {self.current_provider} not supported")
-
-        except Exception as e:
-            error = f"Error from {self.current_provider}: {str(e)}"
-            logger.error(error)
-            raise ValueError(error)
+        logger.error("All available LLM providers failed.")
+        return "Error: Unable to get a response from any LLM provider."
 
     async def _extract_with_llm(self, path: Path) -> str:
-        """Extract text content using LLM for challenging documents."""
+        """Extract text content from a document using an LLM."""
         try:
-            # For text-based models, we'll try to read the file as text first
-            try:
-                async with aiofiles.open(path, 'r', encoding='utf-8') as f:
-                    raw_content = await f.read()
-            except UnicodeDecodeError:
-                # If text reading fails, try reading as binary and decode with latin-1
-                async with aiofiles.open(path, 'rb') as f:
-                    content = await f.read()
-                    raw_content = content.decode('latin-1', errors='ignore')
+            async with aiofiles.open(path, mode='r', encoding='utf-8') as f:
+                content = await f.read()
 
-            # Create a specialized prompt for document extraction
+            # Truncate content if it's too long for the LLM
+            max_llm_extract_length = 3000  # Example limit
+            if len(content) > max_llm_extract_length:
+                content = content[:max_llm_extract_length] + "..."
+                logger.warning(f"Truncated document content for LLM extraction: {path}")
+
             prompt = (
-                "You are a document content extraction specialist. Your task is to:\n"
-                "1. Extract and organize all text content from the provided document\n"
-                "2. Preserve the logical structure and flow\n"
-                "3. Properly format tables, lists, and other elements\n"
-                "4. Include metadata like title and headers\n"
-                "5. Remove any non-text elements or formatting artifacts\n\n"
-                f"Document type: {path.suffix}\n"
-                "Document content:\n\n"
-                f"{raw_content[:10000]}"  # First 10K chars to stay within context limits
+                "Extract the main text content from the following document. "
+                "Focus on the narrative or informational text and ignore "
+                "headers, footers, page numbers, and other non-content elements.\n\n"
+                f"Document content:\n{content}"
             )
 
-            # Use a specialized model for document extraction
-            extracted_content = await self.get_completion(prompt)
-            
-            if not extracted_content:
-                raise ValueError("LLM extraction returned empty content")
-            
-            return str(extracted_content)
+            extracted_text = await self.get_completion(prompt)
+            logger.debug(f"Extracted text from {path} using LLM.")
+            return extracted_text
 
         except Exception as e:
-            logger.error(f"LLM extraction failed: {str(e)}")
-            raise ValueError(f"LLM extraction failed: {str(e)}") 
+            logger.error(f"Failed to extract text from {path} using LLM: {str(e)}")
+            return ""

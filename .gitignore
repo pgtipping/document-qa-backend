@@ -131,6 +131,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.env.*
 
 # Spyder project settings
 .spyderproject
@@ -141,10 +142,7 @@ venv.bak/
 
 # mkdocs documentation
 /site
-memory-bank/
-memory-bank/.cursorrules
-.cursorrules
-memory-bank/*.md
+
 
 # mypy
 .mypy_cache/
@@ -183,9 +181,6 @@ uploads/
 .env
 .coverage
 htmlcov/
-
-# Memory Bank
-memory-bank/
 
 # Python
 __pycache__/
